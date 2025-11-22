@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NoteLens — Local Micro Search for PDFs</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#9aa4b2;--accent:#6ee7b7}
+    body{font-family:Inter, system-ui, Arial, sans-serif;background:linear-gradient(180deg,#071022 0%,#071b2a 100%);color:#e6eef6;margin:0;padding:20px}
+    .app{max-width:1100px;margin:18px auto;padding:22px;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));box-shadow:0 6px 24px rgba(2,6,23,0.6)}
+    h1{margin:0 0 6px;font-size:20px}
+    p.lead{margin:0 0 18px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:320px 1fr;gap:18px}
+    .panel{background:var(--card);padding:12px;border-radius:10px}
+    .uploader{border:2px dashed rgba(255,255,255,0.04);padding:12px;border-radius:8px;text-align:center}
+    input[type=file]{display:none}
+    button{background:var(--accent);border:none;color:#052018;padding:8px 12px;border-radius:8px;cursor:pointer}
+    .small{font-size:13px;color:var(--muted)}
+    .chunks{max-height:320px;overflow:auto;margin-top:10px}
+    .result{padding:10px;border-radius:8px;margin-bottom:10px;background:rgba(255,255,255,0.02)}
+    .score{float:right;color:var(--muted);font-size:12px}
+    .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+    textarea{width:100%;height:72px;padding:8px;border-radius:8px;background:#06121a;border:1px solid rgba(255,255,255,0.03);color:#e6eef6}
+    .footer{margin-top:14px;color:var(--muted);font-size:13px}
+    a.link{color:var(--accent);text-decoration:underline}
+    .loader{display:inline-block;margin-left:8px}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>NoteLens — Local Micro Search for College PDFs</h1>
+    <p class="lead">Upload PDF notes → NoteLens extracts text, builds embeddings in your browser, and provides semantic search — no backend required. (Model loads from CDN)</p>
+
+    <div class="grid">
+      <div>
+        <div class="panel">
+          <div class="uploader">
+            <label for="pdfFile" style="cursor:pointer">
+              <strong>🔍 Drop or choose a PDF</strong>
+              <div class="small">Extracts text pagewise, chunks, then builds local vector store</div>
+            </label>
+            <input id="pdfFile" type="file" accept="application/pdf">
+            <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+              <button id="loadBtn">Load PDF</button>
+              <button id="clearBtn">Clear</button>
+              <span class="small" id="status">No PDF loaded</span>
+            </div>
+            <div class="footer">Model: <span id="modelStatus">not loaded</span></div>
+          </div>
+
+          <div style="margin-top:12px">
+            <label class="small">Chunk size (words)</label>
+            <input id="chunkSize" type="number" value="60" min="20" max="300" style="width:100%;padding:8px;border-radius:8px;margin-top:6px;background:#06121a;border:1px solid rgba(255,255,255,0.03);color:#e6eef6">
+          </div>
+
+          <div style="margin-top:12px">
+            <label class="small">Examples</label>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <button class="exampleBtn">What is the main idea?</button>
+              <button class="exampleBtn">Define convolution</button>
+              <button class="exampleBtn">Find formula for kinetic energy</button>
+            </div>
+          </div>
+
+          <div style="margin-top:12px">
+            <label class="small">Top-k results</label>
+            <input id="topK" type="number" value="5" min="1" max="10" style="width:100%;padding:8px;border-radius:8px;margin-top:6px;background:#06121a;border:1px solid rgba(255,255,255,0.03);color:#e6eef6">
+          </div>
+
+          <div style="margin-top:12px">
+            <label class="small">Saved Bookmarks</label>
+            <div id="bookmarks" class="chunks"></div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="query" placeholder="Ask anything about your notes" style="flex:1;padding:8px;border-radius:8px;background:#06121a;border:1px solid rgba(255,255,255,0.03);color:#e6eef6">
+            <button id="searchBtn">Search</button>
+          </div>
+
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+            <label class="small">Summary length</label>
+            <select id="summaryLen" style="padding:6px;background:#06121a;border-radius:8px;color:#e6eef6">
+              <option value="1">Short</option>
+              <option value="2" selected>Medium</option>
+              <option value="4">Long</option>
+            </select>
+            <button id="autoFlash">Generate Flashcards</button>
+            <button id="exportCsv">Export CSV</button>
+          </div>
+
+          <div id="results" style="margin-top:12px;min-height:80px"></div>
+
+          <h3 style="margin-top:14px;margin-bottom:8px">Raw chunks (for debugging)</h3>
+          <div id="chunksArea" class="chunks"></div>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-top:12px;color:var(--muted);font-size:13px">Tip: First load the PDF, wait for the model to finish building embeddings (status updates). Then enter queries. <a class="link" href="#" id="helpLink">How it works</a></p>
+  </div>
+
+  <!-- External libraries (CDN) -->
+  <!-- pdf.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.9.179/pdf.min.js"></script>
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <!-- Universal Sentence Encoder -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/universal-sentence-encoder@1.4.4/dist/universal-sentence-encoder.min.js"></script>
+
+  <script>
+  // NoteLens — single-file frontend
+  // Author: ChatGPT (delivered to user)
+
+  // State
+  let pdfDoc = null;
+  let chunks = [];         // { id, text, page }
+  let embeddings = null;   // tf.Tensor of shape [N, D]
+  let model = null;
+
+  const statusEl = document.getElementById('status');
+  const modelStatusEl = document.getElementById('modelStatus');
+  const chunksArea = document.getElementById('chunksArea');
+  const resultsEl = document.getElementById('results');
+  const bookmarksEl = document.getElementById('bookmarks');
+
+  // Utils
+  function setStatus(s){ statusEl.innerText = s; }
+  function setModelStatus(s){ modelStatusEl.innerText = s; }
+
+  function sanitizeText(t){ return t.replace(/\s+/g,' ').trim(); }
+
+  // PDF extraction using pdf.js
+  async function extractTextFromPDF(file) {
+    setStatus('Reading PDF...');
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
+    pdfDoc = await loadingTask.promise;
+    const numPages = pdfDoc.numPages;
+    let all = [];
+    for (let p=1; p<=numPages; p++){
+      const page = await pdfDoc.getPage(p);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(i => i.str).join(' ');
+      all.push({page:p, text: sanitizeText(pageText)});
+    }
+    setStatus(`Extracted ${all.length} pages`);
+    return all;
+  }
+
+  // Chunking
+  function buildChunks(pages, chunkWords=60){
+    const out = [];
+    let id = 0;
+    pages.forEach(p => {
+      const words = p.text.split(/\s+/).filter(Boolean);
+      if (words.length === 0) return;
+      for (let i=0;i<words.length;i+=chunkWords){
+        const slice = words.slice(i,i+chunkWords).join(' ');
+        out.push({id: id++, page: p.page, text: sanitizeText(slice)});
+      }
+    });
+    return out;
+  }
+
+  // Build embeddings using USE
+  async function loadModel(){
+    if (model) return model;
+    setModelStatus('loading model...');
+    model = await use.load();
+    setModelStatus('ready');
+    return model;
+  }
+
+  async function buildEmbeddingsForChunks(chks){
+    setStatus('Embedding chunks...');
+    const texts = chks.map(c=>c.text);
+    // create embeddings (use the model's embed function)
+    const embTensor = await model.embed(texts); // tf.Tensor [N, D]
+    setStatus('Embeddings ready');
+    return embTensor; // caller responsible for disposal
+  }
+
+  // Cosine similarity between query vector and chunk vectors
+  async function searchQuery(q, topK=5){
+    if (!embeddings) return [];
+    setStatus('Embedding query...');
+    const qEmb = await model.embed([q]); // shape [1,D]
+    // normalize
+    const qNorm = tf.div(qEmb, tf.norm(qEmb, 'euclidean', 1)); // [1,D]
+    const embNorm = tf.div(embeddings, tf.norm(embeddings, 'euclidean', 1)); // [N,D]
+    // dot product
+    const scores = tf.matMul(embNorm, qNorm, false, true).squeeze(); // [N]
+    const scoresArr = await scores.array();
+    // pair and sort
+    const pairs = scoresArr.map((s,i)=>({score:s, idx:i, chunk:chunks[i]}));
+    pairs.sort((a,b)=>b.score - a.score);
+    const top = pairs.slice(0, topK);
+    // cleanup tensors
+    qEmb.dispose(); qNorm.dispose(); embNorm.dispose(); scores.dispose();
+    setStatus('Search complete');
+    return top;
+  }
+
+  // UI render
+  function renderChunks(){
+    chunksArea.innerHTML = '';
+    chunks.forEach(c=>{
+      const el = document.createElement('div');
+      el.className = 'result';
+      el.innerHTML = `<div class="meta">Page ${c.page}</div><div>${c.text}</div>`;
+      chunksArea.appendChild(el);
+    });
+  }
+
+  function renderResults(items){
+    resultsEl.innerHTML = '';
+    if (!items || items.length === 0){ resultsEl.innerHTML = '<div class="small">No results</div>'; return; }
+    items.forEach(it=>{
+      const r = document.createElement('div');
+      r.className = 'result';
+      const score = (it.score*100).toFixed(1);
+      r.innerHTML = `<div class="meta">Page ${it.chunk.page} <span class="score">${score}%</span></div>
+        <div style="margin-top:6px">${it.chunk.text}</div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="smSave">Bookmark</button>
+          <button class="smExplain">Summarize</button>
+        </div>`;
+      // attach
+      r.querySelector('.smSave').addEventListener('click', ()=>saveBookmark(it));
+      r.querySelector('.smExplain').addEventListener('click', ()=>showCompressed(it));
+      resultsEl.appendChild(r);
+    });
+  }
+
+  function saveBookmark(item){
+    const node = document.createElement('div');
+    node.className = 'result';
+    node.innerHTML = `<div class="meta">Page ${item.chunk.page}</div><div>${item.chunk.text}</div>`;
+    bookmarksEl.appendChild(node);
+  }
+
+  // Basic compressor: combine top-k and rewrite a short human-readable sentence
+  function compressTopItems(items, len=2){
+    // join top texts and produce a minimal extractive rewrite
+    const joined = items.map(i=>i.chunk.text).join(' ');
+    // naive: take first 20-40 words depending on len
+    const words = joined.split(/\s+/).filter(Boolean);
+    const count = Math.min(words.length, 20 * len);
+    const slice = words.slice(0, count).join(' ');
+    return slice + (words.length>count? '...':'');
+  }
+
+  async function showCompressed(item){
+    // find top N around item (for context) and compress
+    const topK = Math.min(parseInt(document.getElementById('topK').value||5), 10);
+    const q = document.getElementById('query').value || item.chunk.text.slice(0,120);
+    const res = await searchQuery(q, topK);
+    const summary = compressTopItems(res.slice(0,parseInt(document.getElementById('summaryLen').value||2)));
+    alert('Compressed summary:\n\n'+summary);
+  }
+
+  // Wire UI
+  document.getElementById('pdfFile').addEventListener('change', async (e)=>{
+    const f = e.target.files[0];
+    if (!f) return; 
+    await prepareFromFile(f);
+  });
+
+  document.getElementById('loadBtn').addEventListener('click', async ()=>{
+    const input = document.getElementById('pdfFile');
+    if (input.files.length===0){ alert('Choose a PDF file first'); return; }
+    await prepareFromFile(input.files[0]);
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', ()=>{
+    chunks = []; if (embeddings){ embeddings.dispose(); embeddings=null; }
+    chunksArea.innerHTML=''; resultsEl.innerHTML=''; bookmarksEl.innerHTML=''; setStatus('Cleared');
+  });
+
+  document.getElementById('searchBtn').addEventListener('click', async ()=>{
+    const q = document.getElementById('query').value.trim();
+    if (!q) { alert('Enter a query'); return; }
+    const k = Math.max(1, parseInt(document.getElementById('topK').value||5));
+    const res = await searchQuery(q,k);
+    renderResults(res);
+  });
+
+  document.querySelectorAll('.exampleBtn').forEach(b=>b.addEventListener('click', ()=>{
+    document.getElementById('query').value = b.innerText; 
+  }));
+
+  document.getElementById('autoFlash').addEventListener('click', async ()=>{
+    const q = document.getElementById('query').value.trim() || 'Summarize the document';
+    const top = await searchQuery(q, Math.min(10, chunks.length));
+    // make 5 Q/A pairs by splitting top text heuristically
+    const flash = top.slice(0,5).map((t,i)=>({q:`Q${i+1}: What is the main point on page ${t.chunk.page}?`, a: t.chunk.text.slice(0,160) }));
+    let out = flash.map(f=>`${f.q}\nA: ${f.a}\n\n`).join('\n');
+    // show in dialog
+    alert('Flashcards:\n\n'+out);
+  });
+
+  document.getElementById('exportCsv').addEventListener('click', ()=>{
+    const rows = chunks.map(c=>[c.id,c.page,c.text.replace(/\n/g,' ')]);
+    let csv = 'id,page,text\n' + rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='note_chunks.csv'; a.click(); URL.revokeObjectURL(url);
+  });
+
+  // prepare file, extract, chunk, load model, build embeddings
+  async function prepareFromFile(file){
+    setStatus('Starting...');
+    const pages = await extractTextFromPDF(file);
+    const csize = Math.max(20, parseInt(document.getElementById('chunkSize').value||60));
+    chunks = buildChunks(pages,csize);
+    renderChunks();
+    setStatus(`Built ${chunks.length} chunks`);
+    await loadModel();
+    if (embeddings){ embeddings.dispose(); embeddings = null; }
+    embeddings = await buildEmbeddingsForChunks(chunks);
+    setStatus('Ready — you can search now');
+  }
+
+  // HELP dialog
+  document.getElementById('helpLink').addEventListener('click', (e)=>{
+    e.preventDefault();
+    alert('How it works:\n1) Upload PDF → we extract text page-by-page\n2) We break text into word chunks\n3) Universal Sentence Encoder builds embeddings in your browser\n4) Query embeds and cosine-similarity finds nearest chunks\n5) Click results to bookmark or compress into short summaries');
+  });
+
+  // Memory cleanup on unload
+  window.addEventListener('beforeunload', ()=>{ if (embeddings) embeddings.dispose(); });
+
+  // End
+  </script>
+</body>
+</html>
